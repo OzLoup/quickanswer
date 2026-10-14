@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Entorno virtual
+.venv/
+
+# macOS
+.DS_Store
+
+# Claves y datos locales (por si alguna vez se guardan dentro del repo)
+.env
+api_key
