@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuickAnswer</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --text:#e8eaf0; --dim:#8b93a5; --accent:#5b9dff; --ok:#3ecf8e; --warn:#f5a524; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system, system-ui, sans-serif; height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
+  select, button, input[type=file]::file-selector-button { background:#222733; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 12px; font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#06101f; font-weight:600; }
+  button.go { background:var(--ok); border-color:var(--ok); color:#04170e; font-weight:600; }
+  button:disabled { opacity:.45; cursor:default; }
+  .spacer { flex:1; }
+  #status { color:var(--dim); font-size:13px; }
+  main { flex:1; display:grid; grid-template-columns: 1fr 340px; min-height:0; }
+  #answerPane { padding:24px 32px; overflow:auto; display:flex; flex-direction:column; gap:14px; }
+  #question { color:var(--dim); font-size:15px; }
+  #answer { font-size:34px; line-height:1.35; font-weight:500; min-height:3em; }
+  #sources { color:var(--dim); font-size:13px; }
+  #side { border-left:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
+  #docs { padding:12px 14px; border-bottom:1px solid var(--line); font-size:13px; color:var(--dim); }
+  #docs div { margin:2px 0; }
+  #log { flex:1; overflow:auto; padding:12px 14px; font-size:13px; }
+  .line { margin:6px 0; } .me { color:var(--dim); } .them { color:var(--text); }
+  .tag { font-size:11px; text-transform:uppercase; letter-spacing:.05em; margin-right:6px; color:var(--accent); } .me .tag { color:var(--dim); }
+  #err { color:var(--warn); padding:0 16px; font-size:13px; }
+  #ask { display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--line); }
+  #ask input { flex:1; background:#222733; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font:inherit; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } #side { display:none; } #answer { font-size:26px; } }
+</style>
+</head>
+<body>
+<header>
+  <label>Idioma <select id="lang"><option value="es">Español</option><option value="en">English</option></select></label>
+  <label>Modelo <select id="prov"><option value="local">Local (Ollama)</option><option value="claude-haiku">Claude Haiku (rápido)</option><option value="claude-sonnet">Claude Sonnet (mejor)</option></select></label>
+  <input type="file" id="file" accept=".docx,.pdf,.md,.markdown,.txt" multiple>
+  <button id="startBtn" class="primary">Iniciar</button>
+  <button id="lastBtn" class="go" disabled>Responder lo último</button>
+  <span class="spacer"></span>
+  <span id="status">Conectando…</span>
+</header>
+<div id="err"></div>
+<main>
+  <section id="answerPane">
+    <div id="question"></div>
+    <div id="answer"></div>
+    <div id="sources"></div>
+  </section>
+  <aside id="side">
+    <div id="docs"><strong>Documentos</strong></div>
+    <div id="log"></div>
+    <div id="ask"><input id="askText" placeholder="Escribir una pregunta…"><button id="askBtn">Enviar</button></div>
+  </aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let ws, running = false, curId = null, hasKey = false;
+const docEls = {};
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => $('status').textContent = 'Listo';
+  ws.onclose = () => { $('status').textContent = 'Desconectado, reintentando…'; setTimeout(connect, 1500); };
+  ws.onmessage = e => handle(JSON.parse(e.data));
+}
+
+function handle(m) {
+  switch (m.type) {
+    case 'status': $('status').textContent = m.text; if ('running' in m) setRunning(m.running); break;
+    case 'error': $('err').textContent = m.text; setTimeout(() => $('err').textContent = '', 8000); break;
+    case 'transcript': {
+      const d = document.createElement('div'); d.className = 'line ' + m.who;
+      d.innerHTML = `<span class="tag">${m.who === 'me' ? 'Yo' : 'Ellos'}</span>`;
+      d.append(m.text); $('log').append(d); $('log').scrollTop = 1e9; break;
+    }
+    case 'answer_start': curId = m.id; $('question').textContent = '❝ ' + m.question; $('answer').textContent = ''; $('sources').textContent = ''; break;
+    case 'answer_delta': if (m.id === curId) $('answer').textContent += m.text; break;
+    case 'answer_end': if (m.id === curId) $('sources').textContent = 'Fuente: ' + m.sources.join(' · '); break;
+    case 'doc_progress': docLine(m.name, `indexando ${m.done}/${m.total}…`); break;
+    case 'doc_ready': docLine(m.name, m.brief ? `✓ listo (${m.chunks} fragmentos)` : `✓ indexado, resumiendo…`); break;
+  }
+}
+
+function docLine(name, text) {
+  if (!docEls[name]) { docEls[name] = document.createElement('div'); $('docs').append(docEls[name]); }
+  docEls[name].textContent = `${name} — ${text}`;
+}
+
+function setRunning(r) {
+  running = r; $('startBtn').textContent = r ? 'Detener' : 'Iniciar';
+  $('lastBtn').disabled = !r; $('lang').disabled = r;
+}
+
+$('startBtn').onclick = async () => {
+  if (running) { await fetch('/api/stop', {method:'POST'}); return; }
+  $('startBtn').disabled = true;
+  const r = await (await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({lang: $('lang').value})})).json();
+  $('startBtn').disabled = false;
+  if (!r.ok) $('err').textContent = r.error;
+  else if (!r.system_found) $('err').textContent = 'No encuentro BlackHole: solo se escucha tu micrófono. Ver README.';
+};
+$('prov').onchange = async () => {
+  const prov = $('prov').value; const body = {provider: prov};
+  if (prov !== 'local' && !hasKey) {
+    const k = prompt('Pega tu clave de API de Anthropic (se guarda solo en esta Mac):');
+    if (!k) { $('prov').value = 'local'; return; }
+    body.api_key = k;
+  }
+  const r = await (await fetch('/api/provider', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})).json();
+  if (!r.ok) { $('err').textContent = r.error; $('prov').value = 'local'; } else hasKey = hasKey || !!body.api_key;
+};
+$('lastBtn').onclick = () => ws.send(JSON.stringify({type:'answer_last'}));
+$('askBtn').onclick = sendAsk; $('askText').onkeydown = e => e.key === 'Enter' && sendAsk();
+function sendAsk() { const t = $('askText').value.trim(); if (t) { ws.send(JSON.stringify({type:'ask', text:t})); $('askText').value = ''; } }
+
+$('file').onchange = async e => {
+  for (const f of e.target.files) {
+    docLine(f.name, 'subiendo…');
+    const fd = new FormData(); fd.append('file', f);
+    await fetch('/api/upload', {method:'POST', body: fd});
+  }
+  e.target.value = '';
+};
+document.addEventListener('keydown', e => { if (e.code === 'Space' && e.target === document.body && running) { e.preventDefault(); $('lastBtn').click(); } });
+
+fetch('/api/status').then(r => r.json()).then(s => {
+  if (!s.ollama.ok) $('err').textContent = s.ollama.error + ' — ejecuta ./setup_mac.sh';
+  s.docs.forEach(n => docLine(n, '✓ cargado'));
+  setRunning(s.running); hasKey = s.has_key; $('prov').value = s.provider;
+});
+connect();
+</script>
+</body>
+</html>
