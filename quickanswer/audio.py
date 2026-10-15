@@ -13,6 +13,13 @@ MIN_SPEECH_S = 0.4
 MAX_SEGMENT_S = 20.0
 
 
+def refresh_devices():
+    """PortAudio guarda la lista de dispositivos al arrancar; si conectas/desconectas audífonos
+    después, los índices quedan viejos y abrir el stream falla (PaErrorCode -9986)."""
+    sd._terminate()
+    sd._initialize()
+
+
 def list_inputs() -> list[dict]:
     return [
         {"index": i, "name": d["name"], "channels": d["max_input_channels"]}

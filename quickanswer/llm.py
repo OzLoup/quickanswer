@@ -26,6 +26,15 @@ async def warmup():
         await c.post(f"{OLLAMA_URL}/api/generate", json={"model": CHAT_MODEL, "keep_alive": "60m"})
 
 
+async def unload_local():
+    """Saca el modelo local de la memoria (≈5 GB) cuando se usa Claude."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(f"{OLLAMA_URL}/api/generate", json={"model": CHAT_MODEL, "keep_alive": 0})
+    except Exception:
+        pass
+
+
 def embed_sync(texts: list[str]) -> list[list[float]]:
     r = httpx.post(f"{OLLAMA_URL}/api/embed", json={"model": EMBED_MODEL, "input": texts, "keep_alive": "60m"}, timeout=300)
     r.raise_for_status()

@@ -20,11 +20,23 @@ _FILLER = {
 }
 
 
+# Palabras que delatan una pregunta aunque no vaya al inicio ni lleve "?" (Whisper a veces no lo pone):
+# "Estas métricas no podrían usarse para vigilar a personas".
+_Q_ANYWHERE = {
+    "es": r"\b(qué|cómo|cuál|cuáles|cuándo|dónde|quién|cuánto|cuántos|cuántas|por qué|podría|podrían|debería|deberían|sería|serían|habría|"
+          r"explique|explíquenos|explica|justifique|cuéntenos|describa)\b",
+    "en": r"\b(what|how|which|why|could|would|should|explain|describe|justify)\b",
+}
+
+
 def is_question(text: str, lang: str) -> bool:
     t = text.strip().lower()
     if "?" in t or "¿" in t:
         return True
-    return len(t.split()) >= 3 and re.match(rf"^\W*{_FILLER[lang]}{_Q_START[lang]}\b", t) is not None
+    n = len(t.split())
+    if n >= 3 and re.match(rf"^\W*{_FILLER[lang]}{_Q_START[lang]}\b", t):
+        return True
+    return n >= 5 and re.search(_Q_ANYWHERE[lang], t) is not None
 
 
 LANG_NAME = {"es": "español", "en": "English"}

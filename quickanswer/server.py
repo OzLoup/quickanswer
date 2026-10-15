@@ -14,6 +14,13 @@ from .qa import build_claude, build_messages, claude_system, is_question
 from .rag import Index
 
 app = FastAPI()
+LATENCY_LOG = Path.home() / ".quickanswer" / "latency.log"
+
+
+def _lat(msg: str):
+    """Registro de tiempos por etapa para diagnosticar demoras."""
+    with LATENCY_LOG.open("a") as f:
+        f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 STATIC = Path(__file__).parent / "static"
 
 
@@ -93,6 +100,9 @@ async def _index_doc(path: Path, lang: str):
         await loop.run_in_executor(None, lambda: S.index.add_document(path, prog))
         emit({"type": "doc_ready", "name": path.name, "chunks": len(S.index.chunks), "brief": False})
         _schedule_prewarm()
+        if S.provider != "local":
+            emit({"type": "doc_ready", "name": path.name, "chunks": len(S.index.chunks), "brief": True})
+            return   # Claude lee el documento completo; el resumen local solo cargaría qwen (≈5 GB) en memoria
         sample = S.index.sample_text(path.name)
         outline = "; ".join(S.index.outlines.get(path.name, [])[:40])
         brief = await llm.chat_once([
@@ -116,6 +126,8 @@ async def set_provider(body: dict):
         return {"ok": False, "error": "Falta la clave de API de Anthropic."}
     S.provider = prov
     _schedule_prewarm()
+    if prov != "local":
+        asyncio.create_task(llm.unload_local())
     return {"ok": True, "provider": prov}
 
 
@@ -161,8 +173,9 @@ async def start(body: dict):
         _schedule_prewarm()
 
     def on_segment(source: str, a):
-        S.loop.call_soon_threadsafe(S.seg_q.put_nowait, (source, a))
+        S.loop.call_soon_threadsafe(S.seg_q.put_nowait, (source, a, time.time()))
 
+    audio.refresh_devices()
     mic = body.get("mic", audio.default_mic())
     system = body.get("system", audio.find_system_device())
     S.capture = audio.Capture(on_segment)
@@ -193,8 +206,10 @@ async def _transcribe_loop():
         item = await S.seg_q.get()
         if item is None:
             break
-        source, a = item
+        source, a, t_end = item
+        t0 = time.time()
         text = await loop.run_in_executor(None, S.transcriber.transcribe, a, S.lang, S.index.vocab_hint())
+        _lat(f"{source:6} audio={len(a) / 16000:5.1f}s cola={t0 - t_end:4.2f}s whisper={time.time() - t0:4.2f}s | {text[:60]}")
         if len(text) < 2:
             continue
         who = "me" if source == "mic" else "them"
@@ -264,7 +279,11 @@ async def _answer(question: str):
             system, msgs = build_claude(S.lang, question, ctx, excerpts=excerpts)
             stream = llm.claude_stream(S.provider, system, msgs)
             sources = asyncio.sleep(0, excerpts)
+        t0, first = time.time(), None
         async for piece in stream:
+            if first is None:
+                first = time.time() - t0
+                _lat(f"answer {S.provider} primera_palabra={first:.2f}s | {question[:60]}")
             await broadcast({"type": "answer_delta", "id": aid, "text": piece})
         excerpts = await sources
         await broadcast({"type": "answer_end", "id": aid, "sources": sorted({c.loc.rstrip(" ·") for c in excerpts[:3]})})
