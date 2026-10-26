@@ -30,7 +30,7 @@ class State:
     running = False
     index = Index()
     clients: set[WebSocket] = set()
-    transcript: list[tuple[float, str, str]] = []   # (t, who, text)
+    transcript: list[tuple[float, str, str, float]] = []   # (t_fin, who, text, t_inicio)
     answer_task: asyncio.Task | None = None
     capture: audio.Capture | None = None
     transcriber = None
@@ -213,36 +213,62 @@ async def _transcribe_loop():
         if len(text) < 2:
             continue
         who = "me" if source == "mic" else "them"
-        S.transcript.append((time.time(), who, text))
+        S.transcript.append((t_end, who, text, t_end - len(a) / 16000))
         await broadcast({"type": "transcript", "who": who, "text": text})
         if who == "them":
             _maybe_answer(text)
 
 
 def _maybe_answer(text: str):
-    """Responde con el bloque completo de la pregunta, aunque el jurado haya hecho pausas a mitad."""
-    block = _last_them_block(max_gap=4)
-    continues = bool(S.last_q) and block.startswith(S.last_q) and block != S.last_q and time.time() - S.last_q_t < 8
+    """Responde con toda la intervención del interlocutor (contexto + todas sus preguntas), no solo la última frase."""
+    block = _last_them_block()
+    continues = bool(S.last_q) and block.startswith(S.last_q) and block != S.last_q and time.time() - S.last_q_t < 10
     if is_question(text, S.lang) or continues:
         _launch_answer(block)
 
 
 def _recent_context(n: int = 6) -> list[str]:
-    return [f"{'Presentador' if w == 'me' else 'Interlocutor'}: {t}" for _, w, t in S.transcript[-n:]]
+    return [f"{'Presentador' if w == 'me' else 'Interlocutor'}: {t}" for _, w, t, _ in S.transcript[-n:]]
 
 
-def _last_them_block(max_gap: float = 15) -> str:
-    """Últimas intervenciones seguidas del interlocutor (con huecos de hasta max_gap segundos)."""
-    block, last_t = [], None
-    for t, who, text in reversed(S.transcript):
+TURN_GAP_S = 15         # silencio del interlocutor que da por terminada su intervención
+TURN_MAX_S = 120        # una intervención no se remonta más allá de esto
+TURN_MAX_CHARS = 3000
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in text.lower().split() if len(w) > 2}
+
+
+def _is_backchannel(t: float, text: str) -> bool:
+    """Un 'mic' que no corta la intervención: muletillas cortas ('ok', 'sí') o eco del interlocutor
+    que el micrófono capta desde los audífonos/bocinas."""
+    w = _words(text)
+    if len(text.split()) < 4:
+        return True
+    for t2, who, text2, _ in S.transcript:
+        if who == "them" and abs(t2 - t) < 15 and len(w & _words(text2)) >= 0.5 * len(w):
+            return True
+    return False
+
+
+def _last_them_block() -> str:
+    """Intervención actual del interlocutor: sus segmentos seguidos (huecos de hasta TURN_GAP_S),
+    hasta que el presentador habla de verdad."""
+    block, next_start, now, size = [], None, time.time(), 0
+    for t, who, text, start in reversed(S.transcript):
+        if now - t > TURN_MAX_S:
+            break
         if who != "them":
-            if block:
+            if block and not _is_backchannel(t, text):
                 break
             continue
-        if last_t is not None and last_t - t > max_gap:
+        if next_start is not None and next_start - t > TURN_GAP_S:   # silencio real entre segmentos
+            break
+        if size + len(text) > TURN_MAX_CHARS:
             break
         block.insert(0, text)
-        last_t = t
+        next_start, size = start, size + len(text)
     return " ".join(block)
 
 

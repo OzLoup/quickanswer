@@ -45,7 +45,10 @@ LANG_NAME = {"es": "español", "en": "English"}
 def instructions(lang: str) -> str:
     return (
         f"Eres el coach de un estudiante que defiende su trabajo ante un jurado. Tu salida es lo que el estudiante dice en voz alta, "
-        f"en {LANG_NAME[lang]}, en MÁXIMO 2 frases (unas 40 palabras), directas y seguras. "
+        f"en {LANG_NAME[lang]}, directo y seguro. "
+        f"LONGITUD: si la intervención trae una sola pregunta, MÁXIMO 2 frases (unas 40 palabras). Si trae varias preguntas, "
+        f"respóndelas TODAS, en el orden en que se hicieron, con 1 o 2 frases cada una, enlazadas de forma natural para decirlas seguidas "
+        f"(por ejemplo 'Sobre X, ...; y en cuanto a Y, ...'). Usa el contexto que dio el interlocutor antes de preguntar para entender a qué se refiere. "
         f"REGLAS: 1) Responde solo lo que se preguntó, en la primera frase, sin introducción, sin contexto extra, sin repetir la pregunta y sin muletillas "
         f"como 'en mi trabajo', 'es importante', 'cabe destacar' ni 'según los documentos'. "
         f"2) Usa del trabajo solo el dato o decisión que respalda la respuesta; un dato concreto basta. "
@@ -60,8 +63,9 @@ def instructions(lang: str) -> str:
 def _question_block(lang: str, question: str, context: list[str]) -> str:
     return (
         f"CONVERSACIÓN RECIENTE:\n{chr(10).join(context) or '(ninguna)'}\n\n"
-        f"PREGUNTA DEL JURADO/ENTREVISTADOR (transcrita por voz; si alguna palabra no tiene sentido, interprétala por el contexto del trabajo): {question}\n\n"
-        f"Lo que debo decir ({LANG_NAME[lang]}, máximo 2 frases):"
+        f"INTERVENCIÓN DEL JURADO/ENTREVISTADOR (transcrita por voz; puede traer contexto y una o varias preguntas; "
+        f"si alguna palabra no tiene sentido, interprétala por el contexto del trabajo): {question}\n\n"
+        f"Lo que debo decir ({LANG_NAME[lang]}; responde todas las preguntas):"
     )
 
 
